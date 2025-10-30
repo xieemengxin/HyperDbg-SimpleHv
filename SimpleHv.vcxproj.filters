@@ -641,6 +641,9 @@
     <ClCompile Include="code\interface\TriggerEvents.c">
       <Filter>Source Files\features</Filter>
     </ClCompile>
+    <ClCompile Include="code\memory\UserModeMemory.c">
+      <Filter>Source Files\memory</Filter>
+    </ClCompile>
   </ItemGroup>
   <!-- ========================================
        Assembly Files Mapping

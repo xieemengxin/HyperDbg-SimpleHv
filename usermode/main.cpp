@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <Windows.h>
 #include <string>
+#include <vector>
 #include "SimpleHvClient.h"
 
 void PrintMenu() {
@@ -9,8 +10,9 @@ void PrintMenu() {
     std::cout << "          Test Menu                     " << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "  1. Ping Hypervisor" << std::endl;
-    std::cout << "  2. Install Test Hooks" << std::endl;
+    std::cout << "  2. Install Test Hooks (Kernel)" << std::endl;
     std::cout << "  3. Unhook All" << std::endl;
+    std::cout << "  4. Test R3 EPTHook (MessageBox)" << std::endl;
     std::cout << "  0. Exit" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Select option: ";
@@ -45,6 +47,89 @@ void RunPingTest(SimpleHv::Client& client) {
         std::cout << "[-] Unexpected signature!" << std::endl;
     }
     std::cout << std::endl;
+}
+
+// Forward declarations for R3 EPTHook test
+typedef int (WINAPI* fnMessageBoxW)(HWND, LPCWSTR, LPCWSTR, UINT);
+fnMessageBoxW g_OriginalMessageBoxW = nullptr;
+
+// R3 Hook function for MessageBoxW
+int WINAPI HookedMessageBoxW(HWND hWnd, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType)
+{
+    std::wcout << L"[R3 Hook] MessageBoxW intercepted! Text: " << (lpText ? lpText : L"(null)") << std::endl;
+
+    if (g_OriginalMessageBoxW) {
+        return g_OriginalMessageBoxW(hWnd, L"Hooked by EPT", lpCaption, uType);
+    }
+    return IDCANCEL;
+}
+
+void RunR3EptHookTest(SimpleHv::Client& client) {
+    std::cout << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "  R3 EPTHook Test (MessageBox)         " << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << std::endl;
+
+    // Get MessageBoxW address
+    HMODULE hUser32 = GetModuleHandleW(L"user32.dll");
+    if (!hUser32) {
+        std::cout << "[-] Failed to get user32.dll handle!" << std::endl;
+        return;
+    }
+
+    FARPROC pMessageBoxW = GetProcAddress(hUser32, "MessageBoxW");
+    if (!pMessageBoxW) {
+        std::cout << "[-] Failed to get MessageBoxW address!" << std::endl;
+        return;
+    }
+
+    std::cout << "[*] MessageBoxW address: 0x" << std::hex << pMessageBoxW << std::dec << std::endl;
+    std::cout << "[*] Hook function address: 0x" << std::hex << (void*)HookedMessageBoxW << std::dec << std::endl;
+    std::cout << "[*] Process ID: " << GetCurrentProcessId() << std::endl;
+    std::cout << std::endl;
+
+    // Test before hook
+    std::cout << "[Test 1] MessageBox before hook..." << std::endl;
+    MessageBoxW(NULL, L"This is original text", L"Before Hook", MB_OK);
+
+    // Install EPTHook
+    std::cout << "\n[*] Installing EPTHook..." << std::endl;
+
+    SIMPLEHV_R3_HOOK_REQUEST request = {0};
+    request.TargetAddress = (PVOID)pMessageBoxW;
+    request.HookFunction = (PVOID)HookedMessageBoxW;
+    request.ProcessId = GetCurrentProcessId();
+
+    SIMPLEHV_R3_HOOK_RESPONSE response = {0};
+
+    if (!client.InstallR3Hook(&request, &response)) {
+        std::cout << "[-] Failed to send IOCTL! Error: " << GetLastError() << std::endl;
+        return;
+    }
+
+    std::cout << "[+] IOCTL completed!" << std::endl;
+    std::cout << "    Status: 0x" << std::hex << response.Status << std::dec << std::endl;
+    std::cout << "    Trampoline: 0x" << std::hex << response.Trampoline << std::dec << std::endl;
+
+    if (response.Status != 0) {
+        std::cout << "[-] Failed to install hook! Status: 0x" << std::hex << response.Status << std::dec << std::endl;
+        return;
+    }
+
+    // Save trampoline
+    g_OriginalMessageBoxW = (fnMessageBoxW)response.Trampoline;
+    std::cout << "[+] EPTHook installed successfully!" << std::endl;
+
+    // Test after hook
+    std::cout << "\n[Test 2] MessageBox after hook (should show 'Hooked by EPT')..." << std::endl;
+    MessageBoxW(NULL, L"This text will be replaced", L"After Hook", MB_OK);
+
+    std::cout << "\n[Test 3] Multiple MessageBox calls..." << std::endl;
+    MessageBoxW(NULL, L"Test 1", L"Multi Test 1", MB_OK);
+    MessageBoxW(NULL, L"Test 2", L"Multi Test 2", MB_OK);
+
+    std::cout << "\n[+] R3 EPTHook test completed!" << std::endl;
 }
 
 int main() {
@@ -141,6 +226,13 @@ int main() {
                     std::cout << "[-] IOCTL failed! Error: " << GetLastError() << std::endl;
                 }
 
+                std::cout << std::endl;
+                std::cout << "Press any key to continue..." << std::endl;
+                system("pause");
+                break;
+
+            case 4:
+                RunR3EptHookTest(client);
                 std::cout << std::endl;
                 std::cout << "Press any key to continue..." << std::endl;
                 system("pause");

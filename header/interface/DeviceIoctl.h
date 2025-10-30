@@ -25,6 +25,9 @@
 #define IOCTL_SIMPLEHV_UNHOOK_ALL \
     CTL_CODE(FILE_DEVICE_SIMPLEHV, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+#define IOCTL_SIMPLEHV_INSTALL_R3_HOOK \
+    CTL_CODE(FILE_DEVICE_SIMPLEHV, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 //////////////////////////////////////////////////
 //            Data Structures                   //
 //////////////////////////////////////////////////
@@ -45,6 +48,23 @@ typedef struct _SIMPLEHV_INSTALL_HOOKS_RESPONSE {
     NTSTATUS Status;        // Installation status
     UINT32 HooksInstalled;  // Number of hooks installed
 } SIMPLEHV_INSTALL_HOOKS_RESPONSE, *PSIMPLEHV_INSTALL_HOOKS_RESPONSE;
+
+/**
+ * @brief R3 EPTHook request structure
+ */
+typedef struct _SIMPLEHV_R3_HOOK_REQUEST {
+    PVOID TargetAddress;    // R3 target function address (e.g., MessageBoxW)
+    PVOID HookFunction;     // R3 hook function address
+    UINT32 ProcessId;       // Target process ID
+} SIMPLEHV_R3_HOOK_REQUEST, *PSIMPLEHV_R3_HOOK_REQUEST;
+
+/**
+ * @brief R3 EPTHook response structure
+ */
+typedef struct _SIMPLEHV_R3_HOOK_RESPONSE {
+    NTSTATUS Status;        // Installation status
+    PVOID Trampoline;       // Returned trampoline address for calling original function
+} SIMPLEHV_R3_HOOK_RESPONSE, *PSIMPLEHV_R3_HOOK_RESPONSE;
 
 //////////////////////////////////////////////////
 //            Function Declarations             //

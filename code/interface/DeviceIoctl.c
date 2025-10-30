@@ -132,6 +132,64 @@ HandleIoctlUnhookAll(PIRP Irp)
 }
 
 /**
+ * @brief Handle IOCTL_SIMPLEHV_INSTALL_R3_HOOK
+ */
+NTSTATUS
+HandleIoctlInstallR3Hook(PIRP Irp)
+{
+    PIO_STACK_LOCATION irpStack;
+    SIMPLEHV_R3_HOOK_REQUEST* request;
+    SIMPLEHV_R3_HOOK_RESPONSE* response;
+    ULONG inputBufferLength, outputBufferLength;
+    NTSTATUS status;
+    PVOID trampoline = NULL;
+
+    irpStack = IoGetCurrentIrpStackLocation(Irp);
+    inputBufferLength = irpStack->Parameters.DeviceIoControl.InputBufferLength;
+    outputBufferLength = irpStack->Parameters.DeviceIoControl.OutputBufferLength;
+
+    // Check buffer sizes
+    if (inputBufferLength < sizeof(SIMPLEHV_R3_HOOK_REQUEST) ||
+        outputBufferLength < sizeof(SIMPLEHV_R3_HOOK_RESPONSE)) {
+        SimpleHvLogError("[DeviceIoctl] R3_HOOK: Buffer size mismatch");
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    request = (SIMPLEHV_R3_HOOK_REQUEST*)Irp->AssociatedIrp.SystemBuffer;
+    response = (SIMPLEHV_R3_HOOK_RESPONSE*)Irp->AssociatedIrp.SystemBuffer;
+
+    SimpleHvLog("[DeviceIoctl] Installing R3 EPTHook:");
+    SimpleHvLog("  Target: 0x%llx", request->TargetAddress);
+    SimpleHvLog("  Hook: 0x%llx", request->HookFunction);
+    SimpleHvLog("  PID: %d", request->ProcessId);
+
+    // Call the R3 EPTHook installation function
+    // Declaration: NTSTATUS InstallR3EptHook(PVOID TargetAddress, PVOID HookFunction, UINT32 ProcessId, PVOID* OutTrampoline)
+    extern NTSTATUS InstallR3EptHook(PVOID, PVOID, UINT32, PVOID*);
+
+    status = InstallR3EptHook(
+        request->TargetAddress,
+        request->HookFunction,
+        request->ProcessId,
+        &trampoline
+    );
+
+    // Fill response
+    response->Status = status;
+    response->Trampoline = trampoline;
+
+    if (NT_SUCCESS(status)) {
+        SimpleHvLog("[DeviceIoctl] R3 EPTHook installed successfully");
+        SimpleHvLog("  Trampoline: 0x%llx", trampoline);
+    } else {
+        SimpleHvLogError("[DeviceIoctl] Failed to install R3 EPTHook: 0x%x", status);
+    }
+
+    Irp->IoStatus.Information = sizeof(SIMPLEHV_R3_HOOK_RESPONSE);
+    return STATUS_SUCCESS;
+}
+
+/**
  * @brief Handle IRP_MJ_DEVICE_CONTROL
  */
 NTSTATUS
@@ -160,6 +218,10 @@ DeviceIoctlDispatch(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         case IOCTL_SIMPLEHV_UNHOOK_ALL:
             status = HandleIoctlUnhookAll(Irp);
+            break;
+
+        case IOCTL_SIMPLEHV_INSTALL_R3_HOOK:
+            status = HandleIoctlInstallR3Hook(Irp);
             break;
 
         default:

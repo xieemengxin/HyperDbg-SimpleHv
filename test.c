@@ -393,3 +393,71 @@ NTSTATUS InstallTestHooks(VOID)
 
 	return STATUS_SUCCESS;
 }
+
+// ========================================
+// R3 EPTHook Support
+// ========================================
+
+/**
+ * @brief Install EPTHook for R3 program
+ * @details This function allows user-mode programs to install EPTHook
+ *          The hook function runs in user mode (R3)
+ *
+ * @param TargetAddress R3 target function address (e.g., MessageBoxW)
+ * @param HookFunction R3 hook function address
+ * @param ProcessId Target process ID
+ * @param OutTrampoline Returns the trampoline address to R3
+ * @return NTSTATUS
+ */
+NTSTATUS InstallR3EptHook(
+	PVOID TargetAddress,
+	PVOID HookFunction,
+	UINT32 ProcessId,
+	PVOID* OutTrampoline)
+{
+	BOOLEAN result;
+
+	SimpleHvLog("========================================");
+	SimpleHvLog("[R3 EPTHook] Installing R3 Hook:");
+	SimpleHvLog("  Target Address: 0x%llx", TargetAddress);
+	SimpleHvLog("  Hook Function: 0x%llx", HookFunction);
+	SimpleHvLog("  Process ID: %d", ProcessId);
+	SimpleHvLog("========================================");
+
+	// Validate parameters
+	if (TargetAddress == NULL || HookFunction == NULL || ProcessId == 0) {
+		SimpleHvLogError("[R3 EPTHook] Invalid parameters");
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	// Check if addresses are in user space (< 0x800000000000)
+	if ((UINT64)TargetAddress >= 0x800000000000 || (UINT64)HookFunction >= 0x800000000000) {
+		SimpleHvLogError("[R3 EPTHook] Addresses must be in user space");
+		return STATUS_INVALID_ADDRESS;
+	}
+
+	// Use ConfigureEptHook2 to install hook with trampoline return
+	result = ConfigureEptHook2(
+		KeGetCurrentProcessorNumberEx(NULL),  // Current CPU
+		TargetAddress,                        // R3 target function
+		HookFunction,                          // R3 hook function
+		ProcessId,                             // Target process ID
+		OutTrampoline                          // Return trampoline
+	);
+
+	if (result) {
+		SimpleHvLog("[R3 EPTHook] Hook installed successfully!");
+		SimpleHvLog("[R3 EPTHook] Trampoline address: 0x%llx", OutTrampoline ? *OutTrampoline : 0);
+
+		// Validate trampoline
+		if (OutTrampoline && *OutTrampoline == NULL) {
+			SimpleHvLogError("[R3 EPTHook] Warning: Trampoline is NULL");
+			return STATUS_UNSUCCESSFUL;
+		}
+
+		return STATUS_SUCCESS;
+	} else {
+		SimpleHvLogError("[R3 EPTHook] Failed to install hook");
+		return STATUS_UNSUCCESSFUL;
+	}
+}

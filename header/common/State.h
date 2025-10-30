@@ -284,6 +284,16 @@ typedef struct _EPT_HOOKED_PAGE_DETAIL
      */
     UINT64 CountOfBreakpoints;
 
+    /**
+     * @brief Flag to indicate if the hook target is in kernel space (R0) or user space (R3)
+     */
+    BOOLEAN IsKernelAddress;
+
+    /**
+     * @brief Process ID where the R3 trampoline was allocated (only for R3 hooks)
+     */
+    HANDLE ProcessId;
+
 } EPT_HOOKED_PAGE_DETAIL, *PEPT_HOOKED_PAGE_DETAIL;
 
 /**

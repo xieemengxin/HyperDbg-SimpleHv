@@ -899,6 +899,8 @@ EptHookWriteAbsoluteJump2(PCHAR TargetBuffer, SIZE_T TargetAddress)
  * @param TargetFunction Target function that needs to be hooked
  * @param TargetFunctionInSafeMemory Target content in the safe memory (used in Length Disassembler Engine)
  * @param HookFunction The function that will be called when hook triggered
+ * @param IsKernelAddress TRUE if target is in kernel space, FALSE if in user space
+ * @param ProcessId Process ID for R3 hooks (used for memory allocation)
  * @return BOOLEAN Returns true if the hook was successful or returns false if it was not successful
  */
 BOOLEAN
@@ -907,7 +909,9 @@ EptHookInstructionMemory(PEPT_HOOKED_PAGE_DETAIL Hook,
                          PVOID                   TargetFunction,
                          PVOID                   TargetFunctionInSafeMemory,
                          PVOID                   HookFunction,
-                         PVOID *                 OutTrampoline)
+                         PVOID *                 OutTrampoline,
+                         BOOLEAN                 IsKernelAddress,
+                         HANDLE                  ProcessId)
 {
     PHIDDEN_HOOKS_DETOUR_DETAILS DetourHookDetails;
     SIZE_T                       SizeOfHookedInstructions;
@@ -963,14 +967,45 @@ EptHookInstructionMemory(PEPT_HOOKED_PAGE_DETAIL Hook,
 
     //
     // Allocate some executable memory for the trampoline
+    // For R0 hooks: Use kernel pool
+    // For R3 hooks: Allocate in user space
     //
-    Hook->Trampoline = (CHAR *)PoolManagerRequestPool(EXEC_TRAMPOLINE, TRUE, MAX_EXEC_TRAMPOLINE_SIZE);
-
-    if (!Hook->Trampoline)
+    if (IsKernelAddress)
     {
-        SimpleHvLogError("Err, could not allocate trampoline function buffer");
-        return FALSE;
+        //
+        // R0 Hook: Use kernel pool (existing behavior)
+        //
+        Hook->Trampoline = (CHAR *)PoolManagerRequestPool(EXEC_TRAMPOLINE, TRUE, MAX_EXEC_TRAMPOLINE_SIZE);
+
+        if (!Hook->Trampoline)
+        {
+            SimpleHvLogError("Err, could not allocate kernel trampoline function buffer");
+            return FALSE;
+        }
+
+        SimpleHvLog("[EptHookInstructionMemory] R0 Hook: Allocated kernel trampoline at 0x%llx", Hook->Trampoline);
     }
+    else
+    {
+        //
+        // R3 Hook: Allocate in user space of target process
+        //
+        Hook->Trampoline = (CHAR *)AllocateUserModeTrampoline(ProcessId, ProcessCr3, MAX_EXEC_TRAMPOLINE_SIZE);
+
+        if (!Hook->Trampoline)
+        {
+            SimpleHvLogError("Err, could not allocate user-mode trampoline function buffer");
+            return FALSE;
+        }
+
+        SimpleHvLog("[EptHookInstructionMemory] R3 Hook: Allocated user-mode trampoline at 0x%llx for PID %d", Hook->Trampoline, ProcessId);
+    }
+
+    //
+    // Store the allocation type in the Hook structure for later cleanup
+    //
+    Hook->IsKernelAddress = IsKernelAddress;
+    Hook->ProcessId = ProcessId;
 
     //
     // Copy the trampoline instructions in
@@ -1321,7 +1356,29 @@ EptHookPerformPageHookMonitorAndInlineHook(VIRTUAL_MACHINE_STATE * VCpu,
         // Create Hook
         //
         PVOID * OutTrampoline = ((EPT_HOOKS_ADDRESS_DETAILS_FOR_EPTHOOK2 *)HookingDetails)->OutTrampoline;
-        if (!EptHookInstructionMemory(HookedPage, ProcessCr3, TargetAddress, (PVOID)TargetAddressInSafeMemory, HookFunction, OutTrampoline))
+
+        //
+        // Determine if target address is in kernel space
+        //
+        BOOLEAN IsKernelAddr = ((UINT64)TargetAddress >= 0xFFFF800000000000);
+
+        //
+        // Get ProcessId from HookingDetails
+        //
+        HANDLE ProcessId = ((EPT_HOOKS_ADDRESS_DETAILS_FOR_EPTHOOK2 *)HookingDetails)->ProcessId;
+
+        if (!IsKernelAddr && ProcessId != 0)
+        {
+            SimpleHvLog("[EptHookPerformPageHook] R3 Hook detected, using ProcessId: %d from HookingDetails", ProcessId);
+        }
+        else if (!IsKernelAddr && ProcessId == 0)
+        {
+            // Fallback if ProcessId wasn't provided (shouldn't happen for R3)
+            SimpleHvLogError("[EptHookPerformPageHook] Warning: R3 Hook without ProcessId, using current process");
+            ProcessId = PsGetCurrentProcessId();
+        }
+
+        if (!EptHookInstructionMemory(HookedPage, ProcessCr3, TargetAddress, (PVOID)TargetAddressInSafeMemory, HookFunction, OutTrampoline, IsKernelAddr, ProcessId))
         {
             PoolManagerFreePool((UINT64)HookedPage);
 
@@ -1660,6 +1717,7 @@ EptHookInlineHook(VIRTUAL_MACHINE_STATE * VCpu,
     HookingDetail.TargetAddress = TargetAddress;
     HookingDetail.HookFunction  = HookFunction;
     HookingDetail.OutTrampoline = OutTrampoline;
+    HookingDetail.ProcessId     = ProcessId;
 
     BOOLEAN Result = EptHookPerformMemoryOrInlineHook(VCpu,
                                                        &HookingDetail,
@@ -2574,6 +2632,34 @@ EptHookUnHookAll()
         }
 
         //
+        // Free the trampoline memory
+        // For R0 hooks: Use pool manager
+        // For R3 hooks: Free from user space
+        //
+        if (CurrEntity->Trampoline)
+        {
+            if (CurrEntity->IsKernelAddress)
+            {
+                //
+                // R0 Hook: Free kernel trampoline via pool manager
+                //
+                if (!PoolManagerFreePool((UINT64)CurrEntity->Trampoline))
+                {
+                    SimpleHvLogError("Failed to free kernel trampoline at 0x%llx", CurrEntity->Trampoline);
+                }
+                SimpleHvLog("[EptHookUnHookAll] Freed kernel trampoline at 0x%llx", CurrEntity->Trampoline);
+            }
+            else
+            {
+                //
+                // R3 Hook: Free user space trampoline
+                //
+                FreeUserModeTrampoline(CurrEntity->Trampoline, CurrEntity->ProcessId, MAX_EXEC_TRAMPOLINE_SIZE);
+                SimpleHvLog("[EptHookUnHookAll] Freed user-mode trampoline at 0x%llx for PID %d", CurrEntity->Trampoline, CurrEntity->ProcessId);
+            }
+        }
+
+        //
         // As we are in vmx-root here, we add the hooked entry to the list
         // of pools that will be deallocated on next IOCTL
         //
@@ -3111,6 +3197,7 @@ EptHookInstallHiddenInlineHookAuto(
     //
     HookDetail.TargetAddress = TargetAddress;
     HookDetail.HookFunction = HookFunction;
+    HookDetail.ProcessId = ProcessId;
 
     //
     // ========================================

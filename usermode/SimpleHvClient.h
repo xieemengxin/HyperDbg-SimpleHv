@@ -25,6 +25,9 @@
 #define IOCTL_SIMPLEHV_UNHOOK_ALL \
     CTL_CODE(FILE_DEVICE_SIMPLEHV, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+#define IOCTL_SIMPLEHV_INSTALL_R3_HOOK \
+    CTL_CODE(FILE_DEVICE_SIMPLEHV, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 //////////////////////////////////////////////////
 //            Data Structures                   //
 //////////////////////////////////////////////////
@@ -39,6 +42,17 @@ typedef struct _SIMPLEHV_INSTALL_HOOKS_RESPONSE {
     UINT32 Status;          // NTSTATUS
     UINT32 HooksInstalled;
 } SIMPLEHV_INSTALL_HOOKS_RESPONSE, *PSIMPLEHV_INSTALL_HOOKS_RESPONSE;
+
+typedef struct _SIMPLEHV_R3_HOOK_REQUEST {
+    PVOID TargetAddress;    // R3 target function address (e.g., MessageBoxW)
+    PVOID HookFunction;     // R3 hook function address
+    UINT32 ProcessId;       // Target process ID
+} SIMPLEHV_R3_HOOK_REQUEST, *PSIMPLEHV_R3_HOOK_REQUEST;
+
+typedef struct _SIMPLEHV_R3_HOOK_RESPONSE {
+    UINT32 Status;          // NTSTATUS
+    PVOID Trampoline;       // Returned trampoline address
+} SIMPLEHV_R3_HOOK_RESPONSE, *PSIMPLEHV_R3_HOOK_RESPONSE;
 
 //////////////////////////////////////////////////
 //            SimpleHv Client Class             //
@@ -147,6 +161,25 @@ public:
             0,
             NULL,
             0,
+            &bytesReturned,
+            NULL
+        ) != FALSE;
+    }
+
+    /**
+     * @brief Install R3 EPTHook
+     */
+    bool InstallR3Hook(SIMPLEHV_R3_HOOK_REQUEST* request, SIMPLEHV_R3_HOOK_RESPONSE* response) {
+        if (!IsConnected()) return false;
+
+        DWORD bytesReturned;
+        return DeviceIoControl(
+            hDevice,
+            IOCTL_SIMPLEHV_INSTALL_R3_HOOK,
+            request,
+            sizeof(SIMPLEHV_R3_HOOK_REQUEST),
+            response,
+            sizeof(SIMPLEHV_R3_HOOK_RESPONSE),
             &bytesReturned,
             NULL
         ) != FALSE;

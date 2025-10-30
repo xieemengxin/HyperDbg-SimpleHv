@@ -133,6 +133,11 @@
 #include "hooks/ExecTrap.h"
 
 //
+// Headers for user-mode memory management
+//
+#include "memory/UserModeMemory.h"
+
+//
 // Headers for exporting functions to remove the driver
 //
 //#include "common/UnloadDll.h"

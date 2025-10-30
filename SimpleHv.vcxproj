@@ -223,6 +223,7 @@
     <ClCompile Include="code\memory\PoolManager.c" />
     <ClCompile Include="code\memory\Segmentation.c" />
     <ClCompile Include="code\memory\SwitchLayout.c" />
+    <ClCompile Include="code\memory\UserModeMemory.c" />
     <ClCompile Include="code\mmio\MmioShadowing.c" />
     <ClCompile Include="code\pch.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
